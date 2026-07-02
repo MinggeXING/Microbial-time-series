@@ -1,0 +1,146 @@
+cat > /home/xmg/qiime2/run_rarefy_complete.sh << 'EOF'
+#!/bin/bash
+
+# ============================================================
+#  QIIME 2 Complete Rarefaction Script for Microbial Data
+#  Function: Input from TSV feature table, convert to BIOM,
+#            rarefy with QIIME2, and output both TSV and
+#            comma-separated CSV result files.
+# ============================================================
+
+# ---------- Configuration variables ----------
+# Input file (TSV format, rows are features, columns are samples,
+# first column is feature ID, first row is sample names)
+INPUT_TSV="asv_abs_stage_rounded.tsv"
+
+# Rarefaction depth (minimum total reads per sample)
+DEPTH=528969445
+
+# Output file prefix
+OUTPUT_PREFIX="rarefied"
+
+# Temporary files
+BIOM_FILE="feature-table.biom"
+QZA_FILE="feature-table.qza"
+RAREFIED_QZA="${OUTPUT_PREFIX}-table.qza"
+RAREFIED_BIOM="${OUTPUT_PREFIX}-table.biom"
+RAREFIED_TSV="${OUTPUT_PREFIX}-table.tsv"
+RAREFIED_CSV="${OUTPUT_PREFIX}-table.csv"
+
+# ---------- Environment activation ----------
+echo "================================================"
+echo "Starting QIIME 2 rarefaction script"
+echo "Start time: $(date)"
+echo "================================================"
+
+# Activate Conda environment
+source /home/xmg/miniconda3/enter/etc/profile.d/conda.sh
+conda activate qiime2
+
+# Check required tools
+if ! command -v qiime &> /dev/null; then
+    echo "Error: QIIME 2 is not properly installed or activated"
+    exit 1
+fi
+
+if ! command -v biom &> /dev/null; then
+    echo "Error: biom tool not found, please install: conda install -c conda-forge biom-format"
+    exit 1
+fi
+
+# ---------- Check input file ----------
+if [ ! -f "$INPUT_TSV" ]; then
+    echo "Error: Input file $INPUT_TSV does not exist"
+    echo "Current directory contents:"
+    ls -la
+    exit 1
+fi
+
+echo "Input file: $INPUT_TSV"
+echo "Rarefaction depth: $DEPTH"
+
+# ---------- 1. TSV → BIOM ----------
+echo "Step 1/5: Converting TSV to BIOM format..."
+biom convert -i "$INPUT_TSV" -o "$BIOM_FILE" --table-type="OTU table" --to-hdf5
+
+if [ ! -f "$BIOM_FILE" ]; then
+    echo "Error: TSV to BIOM conversion failed"
+    exit 1
+fi
+echo "BIOM file generated: $BIOM_FILE"
+
+# ---------- 2. BIOM → QIIME2 Artifact (.qza) ----------
+echo "Step 2/5: Importing BIOM to QIIME 2 format..."
+qiime tools import \
+    --input-path "$BIOM_FILE" \
+    --type 'FeatureTable[Frequency]' \
+    --input-format BIOMV210Format \
+    --output-path "$QZA_FILE"
+
+if [ ! -f "$QZA_FILE" ]; then
+    echo "Error: Import to QIIME2 failed"
+    exit 1
+fi
+echo "QIIME2 Artifact generated: $QZA_FILE"
+
+# ---------- 3. Rarefaction ----------
+echo "Step 3/5: Performing rarefaction (depth $DEPTH)..."
+qiime feature-table rarefy \
+    --i-table "$QZA_FILE" \
+    --p-sampling-depth "$DEPTH" \
+    --o-rarefied-table "$RAREFIED_QZA"
+
+if [ ! -f "$RAREFIED_QZA" ]; then
+    echo "Error: Rarefaction process failed"
+    exit 1
+fi
+echo "Rarefaction completed: $RAREFIED_QZA"
+
+# ---------- 4. Export BIOM ----------
+echo "Step 4/5: Exporting rarefied result to BIOM..."
+qiime tools export \
+    --input-path "$RAREFIED_QZA" \
+    --output-path ./
+
+# QIIME2 exports as feature-table.biom by default, rename it
+if [ -f "feature-table.biom" ]; then
+    mv feature-table.biom "$RAREFIED_BIOM"
+    echo "BIOM result: $RAREFIED_BIOM"
+else
+    echo "Warning: Exported BIOM file not found, export may have failed"
+    exit 1
+fi
+
+# ---------- 5. BIOM → TSV and CSV ----------
+echo "Step 5/5: Converting to TSV and CSV formats..."
+
+# 5a. Convert to TSV (tab-separated)
+biom convert -i "$RAREFIED_BIOM" -o "$RAREFIED_TSV" --to-tsv
+if [ -f "$RAREFIED_TSV" ]; then
+    echo "TSV file: $RAREFIED_TSV"
+else
+    echo "Warning: TSV conversion failed"
+fi
+
+# 5b. Convert to true CSV (comma-separated)
+# Method: replace tabs with commas in TSV, handling possible quotes issues
+awk 'BEGIN {FS="\t"; OFS=","} {$1=$1; print}' "$RAREFIED_TSV" > "$RAREFIED_CSV"
+if [ -f "$RAREFIED_CSV" ]; then
+    echo "CSV file: $RAREFIED_CSV (comma-separated)"
+else
+    echo "Warning: CSV conversion failed"
+fi
+
+# ---------- Clean temporary files ----------
+# If you want to keep intermediate files, comment out the following lines
+# rm -f "$BIOM_FILE" "$QZA_FILE"
+# echo "Temporary files cleaned up"
+
+# ---------- Done ----------
+echo "================================================"
+echo "QIIME 2 rarefaction pipeline completed successfully!"
+echo "End time: $(date)"
+echo "Generated files:"
+ls -lh "$RAREFIED_TSV" "$RAREFIED_CSV" "$RAREFIED_BIOM" "$RAREFIED_QZA" 2>/dev/null
+echo "================================================"
+EOF
